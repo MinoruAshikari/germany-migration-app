@@ -19,17 +19,15 @@ def create_connection():
         schema=st.secrets["snowflake"]["schema"]
     )
 
-# --- 2. 為替レートを取得する関数 (改良版：エラー対策付き) ---
+# --- 2. 為替レートを取得する関数 ---
 def get_eur_myr_rate():
     try:
-        # 無料の為替APIを使用（3秒で諦める設定を追加）
         url = "https://api.exchangerate-api.com/v4/latest/EUR"
         response = requests.get(url, timeout=3)
-        response.raise_for_status() # エラーならここで教えてくれる
+        response.raise_for_status()
         data = response.json()
         return data['rates']['MYR']
     except Exception as e:
-        # 失敗したら画面に小さくエラーを出して、0を返す（止まらせない！）
         st.warning(f"⚠️ 為替レートが取れませんでした: {e}")
         return 0.0
 
@@ -49,17 +47,17 @@ def save_rate(rate):
     conn.commit()
     conn.close()
 
-# --- 4. データを表示する ---
+# --- 4. 候補者データを表示する関数 ---
 def get_candidates():
     conn = create_connection()
     try:
         df = pd.read_sql("SELECT * FROM candidates", conn)
     except:
-        df = pd.DataFrame() # テーブルがない場合
+        df = pd.DataFrame()
     conn.close()
     return df
 
-# --- 5. 為替履歴を表示する ---
+# --- 5. 為替履歴を表示する関数 ---
 def get_rate_history():
     conn = create_connection()
     try:
@@ -75,22 +73,25 @@ def get_rate_history():
 
 tab1, tab2 = st.tabs(["👥 移住候補者リスト", "💰 為替レート監視"])
 
+# タブ1：候補者リスト
 with tab1:
     st.subheader("現在の候補者状況")
     df = get_candidates()
     if not df.empty:
         df.columns = ["ID", "名前", "スキル", "目標の国"]
         st.dataframe(df, use_container_width=True)
+        
         col1, col2 = st.columns(2)
         with col1:
+            st.write("📊 国別の割合")
             st.bar_chart(df["目標の国"].value_counts())
         with col2:
-            st.write("スキル内訳")
+            st.write("📊 スキル分布")
             st.dataframe(df["スキル"].value_counts())
     else:
         st.info("データがまだありません。")
 
-    # サイドバー
+    # サイドバー入力フォーム
     st.sidebar.header("📝 新規メンバー登録")
     new_name = st.sidebar.text_input("名前")
     new_skill = st.sidebar.selectbox("スキル", ["Python", "SQL", "英語", "ドイツ語", "マネジメント", "その他"])
@@ -102,13 +103,13 @@ with tab1:
         cur.execute(f"INSERT INTO candidates (name, skill, target_country) VALUES ('{new_name}', '{new_skill}', '{new_country}')")
         conn.commit()
         conn.close()
-        st.success("登録しました！")
+        st.success(f"{new_name} さんを登録しました！")
         st.rerun()
 
+# タブ2：為替レート
 with tab2:
     st.subheader("💶 ユーロ/リンギット (EUR to MYR)")
     
-    # ここでAPIを呼ぶ（もし失敗しても0.0が返ってくるので止まらない）
     current_rate = get_eur_myr_rate()
     
     col_rate, col_btn = st.columns([2, 1])
