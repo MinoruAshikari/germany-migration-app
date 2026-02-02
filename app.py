@@ -3,10 +3,11 @@ import snowflake.connector
 import pandas as pd
 import requests
 from datetime import datetime
+from deep_translator import GoogleTranslator # 翻訳機をインポート
 
 # ページ設定
-st.set_page_config(page_title="ドイツ移住計画DB", layout="wide")
-st.title("焚き火社長のドイツ移住計画 🇩🇪 x 💹")
+st.set_page_config(page_title="3ヶ国語マスターDB", layout="wide")
+st.title("🇯🇵 日本語 ➡ 🇺🇸 英語 ➡ 🇩🇪 ドイツ語")
 
 # --- 1. Snowflake接続 ---
 def create_connection():
@@ -19,90 +20,52 @@ def create_connection():
         schema=st.secrets["snowflake"]["schema"]
     )
 
-# --- 2. 為替レートを取得する関数 ---
-def get_eur_myr_rate():
+# --- 2. 自動翻訳する関数（魔法の呪文） ---
+def translate_text(text):
     try:
-        url = "https://api.exchangerate-api.com/v4/latest/EUR"
-        response = requests.get(url, timeout=3)
-        response.raise_for_status()
-        data = response.json()
-        return data['rates']['MYR']
-    except Exception as e:
-        return 0.0
-
-# --- 3. 候補者データの関数 ---
-def get_candidates():
-    conn = create_connection()
-    try:
-        df = pd.read_sql("SELECT * FROM candidates", conn)
+        # 日本語 -> 英語
+        english_text = GoogleTranslator(source='ja', target='en').translate(text)
+        # 日本語 -> ドイツ語
+        german_text = GoogleTranslator(source='ja', target='de').translate(text)
+        return english_text, german_text
     except:
-        df = pd.DataFrame()
-    conn.close()
-    return df
+        return "Error", "Error"
 
-def add_candidate(name, skill, country):
-    conn = create_connection()
-    cur = conn.cursor()
-    cur.execute(f"INSERT INTO candidates (name, skill, target_country) VALUES ('{name}', '{skill}', '{country}')")
-    conn.commit()
-    conn.close()
-
-# --- 4. 為替データの関数 ---
-def save_rate(rate):
+# --- 3. データを登録する関数 ---
+def add_trilingual_vocab(japanese, english, german, memo):
     conn = create_connection()
     cursor = conn.cursor()
+    # 3ヶ国語用の新しいテーブルを作る
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS exchange_rates (
-            recorded_at TIMESTAMP,
-            currency_pair STRING,
-            rate FLOAT
-        )
-    """)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute(f"INSERT INTO exchange_rates VALUES ('{now}', 'EUR/MYR', {rate})")
-    conn.commit()
-    conn.close()
-
-def get_rate_history():
-    conn = create_connection()
-    try:
-        df = pd.read_sql("SELECT * FROM exchange_rates ORDER BY recorded_at DESC", conn)
-    except:
-        df = pd.DataFrame()
-    conn.close()
-    return df
-
-# --- 🆕 5. 単語帳の関数（削除機能付き！） ---
-def add_vocab(german, japanese, memo):
-    conn = create_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS vocab_book (
+        CREATE TABLE IF NOT EXISTS trilingual_book (
             id INTEGER IDENTITY(1,1),
-            german STRING,
             japanese STRING,
+            english STRING,
+            german STRING,
             memo STRING,
             created_at TIMESTAMP
         )
     """)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute(f"INSERT INTO vocab_book (german, japanese, memo, created_at) VALUES ('{german}', '{japanese}', '{memo}', '{now}')")
+    cursor.execute(f"INSERT INTO trilingual_book (japanese, english, german, memo, created_at) VALUES ('{japanese}', '{english}', '{german}', '{memo}', '{now}')")
     conn.commit()
     conn.close()
 
-def get_vocab():
+# --- 4. データを取得する関数 ---
+def get_trilingual_vocab():
     conn = create_connection()
     try:
-        df = pd.read_sql("SELECT id, german, japanese, memo, created_at FROM vocab_book ORDER BY created_at DESC", conn)
+        df = pd.read_sql("SELECT id, japanese, english, german, memo, created_at FROM trilingual_book ORDER BY created_at DESC", conn)
     except:
         df = pd.DataFrame()
     conn.close()
     return df
 
+# --- 5. データを削除する関数 ---
 def delete_vocab(vocab_id):
     conn = create_connection()
     cur = conn.cursor()
-    cur.execute(f"DELETE FROM vocab_book WHERE id = {vocab_id}")
+    cur.execute(f"DELETE FROM trilingual_book WHERE id = {vocab_id}")
     conn.commit()
     conn.close()
 
@@ -110,116 +73,54 @@ def delete_vocab(vocab_id):
 # 画面レイアウト
 # ==========================================
 
-# ここで「3つのタブ」を作っています（これが消えていたのが原因でした！）
-tab1, tab2, tab3 = st.tabs(["👥 移住候補者", "💰 為替レート", "🇩🇪 単語帳"])
+st.info("💡 日本語を入力するだけで、AIが自動で英語とドイツ語に翻訳して登録します！")
 
-# --- タブ1：候補者リスト ---
-with tab1:
-    st.subheader("現在の候補者状況")
-    df = get_candidates()
-    if not df.empty:
-        df.columns = ["ID", "名前", "スキル", "目標の国"]
-        st.dataframe(df, use_container_width=True)
-        col1, col2 = st.columns(2)
+# ■ 入力フォーム
+with st.container():
+    st.subheader("📝 新しい単語を追加")
+    
+    with st.form("translation_form", clear_on_submit=True):
+        col1, col2 = st.columns([3, 1])
         with col1:
-            st.bar_chart(df["目標の国"].value_counts())
+            input_jp = st.text_input("日本語を入力してください", placeholder="例：こんにちは、契約書、ビザ...")
         with col2:
-            st.write("📊 スキル分布")
-            st.dataframe(df["スキル"].value_counts())
-    else:
-        st.info("データがまだありません。")
-
-    st.sidebar.header("📝 メンバー登録")
-    new_name = st.sidebar.text_input("名前")
-    new_skill = st.sidebar.selectbox("スキル", ["Python", "SQL", "英語", "ドイツ語", "マネジメント", "その他"])
-    new_country = st.sidebar.radio("目標の国", ["Germany", "Netherlands", "Japan", "Other"])
-    
-    if st.sidebar.button("メンバー登録"):
-        add_candidate(new_name, new_skill, new_country)
-        st.success(f"{new_name} さんを登録しました！")
-        st.rerun()
-
-# --- タブ2：為替レート ---
-with tab2:
-    st.subheader("💶 ユーロ/リンギット (EUR to MYR)")
-    current_rate = get_eur_myr_rate()
-    
-    col_rate, col_btn = st.columns([2, 1])
-    with col_rate:
-        st.metric(label="現在のレート (1 EUR)", value=f"{current_rate} MYR")
-    
-    with col_btn:
-        if st.button("レートを記録する 💾"):
-            if current_rate > 0:
-                save_rate(current_rate)
-                st.success("Snowflakeに保存しました！")
-                st.rerun()
-            else:
-                st.error("レート取得失敗")
-            
-    st.divider()
-    st.write("📊 履歴")
-    history_df = get_rate_history()
-    if not history_df.empty:
-        st.line_chart(history_df.set_index("RECORDED_AT")["RATE"])
-        st.dataframe(history_df, use_container_width=True)
-
-# --- 🔄 タブ3：ドイツ語単語帳（検索＆削除機能付き） ---
-with tab3:
-    st.header("🇩🇪 My Vocabulary Book")
-    
-    # ■ 1. 新規登録エリア
-    with st.expander("📝 新しい単語を登録する", expanded=True):
-        with st.form("vocab_form", clear_on_submit=True):
-            c1, c2, c3 = st.columns([2, 2, 1])
-            with c1:
-                in_german = st.text_input("ドイツ語 (German)")
-            with c2:
-                in_japanese = st.text_input("日本語 (Japanese)")
-            with c3:
-                in_memo = st.text_input("メモ (Example etc.)")
-            
-            submitted = st.form_submit_button("単語を保存 📥")
-            
-            if submitted and in_german and in_japanese:
-                add_vocab(in_german, in_japanese, in_memo)
-                st.success(f"「{in_german}」を覚えました！")
-                st.rerun()
-
-    st.divider()
-    
-    # ■ 2. 検索・一覧・削除エリア
-    st.subheader("📚 覚えた単語リスト")
-
-    vocab_df = get_vocab()
-    
-    if not vocab_df.empty:
-        # 見やすいカラム名にする（大文字のままだと扱いづらいので）
-        vocab_df.columns = [col.upper() for col in vocab_df.columns]
+            input_memo = st.text_input("メモ (任意)")
         
-        # --- 🔍 検索機能 ---
-        search_query = st.text_input("🔍 単語を検索する", placeholder="ドイツ語や日本語で検索...")
+        # ボタンを押すと翻訳＆保存
+        submitted = st.form_submit_button("自動翻訳して保存 🚀")
         
-        display_df = vocab_df.copy()
-        if search_query:
-            display_df = display_df[
-                display_df['GERMAN'].str.contains(search_query, case=False) | 
-                display_df['JAPANESE'].str.contains(search_query, case=False)
-            ]
-        
-        st.dataframe(display_df, use_container_width=True)
-        
-        # --- 🗑️ 削除機能 ---
-        st.write("🗑️ データを削除する")
-        # 削除リストを作る
-        delete_options = display_df.apply(lambda x: f"{x['ID']}: {x['GERMAN']} ({x['JAPANESE']})", axis=1)
-        target_vocab = st.selectbox("削除する単語を選択してください", options=delete_options)
-        
-        if st.button("選択した単語を削除する 💥"):
-            target_id = target_vocab.split(":")[0]
-            delete_vocab(target_id)
-            st.success("削除しました！")
+        if submitted and input_jp:
+            with st.spinner("AIが翻訳中..."):
+                # ここで翻訳を実行！
+                trans_en, trans_de = translate_text(input_jp)
+                
+                # 結果を保存
+                add_trilingual_vocab(input_jp, trans_en, trans_de, input_memo)
+                
+            st.success(f"登録完了！ 🇺🇸 {trans_en} / 🇩🇪 {trans_de}")
             st.rerun()
-            
-    else:
-        st.info("まだ単語がありません。上のフォームから登録してみましょう！")
+
+st.divider()
+
+# ■ リスト表示
+st.subheader("📚 3ヶ国語単語帳")
+df = get_trilingual_vocab()
+
+if not df.empty:
+    # カラム名をきれいにする
+    df.columns = ["ID", "🇯🇵 日本語", "🇺🇸 英語", "🇩🇪 ドイツ語", "メモ", "登録日"]
+    
+    # メインの表を表示
+    st.dataframe(df, use_container_width=True)
+    
+    # 削除機能
+    with st.expander("🗑️ データを削除する"):
+        delete_options = df.apply(lambda x: f"{x['ID']}: {x['🇯🇵 日本語']}", axis=1)
+        target = st.selectbox("削除する単語を選択", options=delete_options)
+        if st.button("削除実行"):
+            target_id = target.split(":")[0]
+            delete_vocab(target_id)
+            st.warning("削除しました")
+            st.rerun()
+else:
+    st.write("まだデータがありません。「こんにちは」と入れてみてください！")
